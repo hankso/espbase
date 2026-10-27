@@ -67,7 +67,7 @@ export default withPwa(defineConfig(() => {
             socialLinks: [
                 {
                     icon: 'github',
-                    link: 'https://github.com/hankso/esp32/tree/main/espbase',
+                    link: 'https://github.com/hankso/espbase',
                 },
             ],
         },

@@ -22,7 +22,7 @@
 <body>
     <div id="app" class="markdown-body">Loading...</div>
     <script>
-        // TODO: sidebar nav foot
+        const base = 'localhost' === location.hostname ? '/docs' : '/espbase'
         marked.use({
             gfm: true,
             breaks: true,
@@ -36,7 +36,7 @@
         })
         function load() {
             let path = location.hash.slice(1) || '/index'
-            fetch(`/docs${path.replace(/\.(md|html)$/i, '')}.md`)
+            fetch(`${base}${path.replace(/\.(md|html)$/i, '')}.md`)
                 .then(rep => {
                     if (rep.ok) return rep.text()
                     throw new Error(`${rep.status} - ${rep.statusText}`)
