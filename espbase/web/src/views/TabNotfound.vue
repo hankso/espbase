@@ -36,7 +36,7 @@ onMounted(async function () {
                     $route.query.url
                         ? $route.query.url
                         : $route.redirectedFrom
-                          ? $route.redirectedFrom.substr(1)
+                          ? $route.redirectedFrom.slice(1)
                           : ''
                 }}</span>
                 not found

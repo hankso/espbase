@@ -5,13 +5,11 @@
 </template>
 
 <script setup>
+import Prism from '@/plugins/prism'
 import { type, debounce } from '@/utils'
 
 import { CodeJar } from 'codejar'
 import { withLineNumbers } from 'codejar-linenumbers'
-
-import { highlightElement as prism } from 'prismjs' // 3.6kB
-// import 'prismjs/themes/prism.css' provided by vite.config.js:prism:css
 
 var editor = null
 
@@ -50,7 +48,7 @@ function rainbow(ch, i) {
 }
 
 const highlighters = {
-    prism,
+    prism: Prism.highlightElement,
     lolcat: e => (e.innerHTML = e.textContent.split('').map(rainbow).join('')),
 }
 
@@ -116,36 +114,33 @@ onBeforeUnmount(destroy)
 </script>
 
 <style scoped>
-.codejar-editor[contenteditable='false'] {
-    cursor: not-allowed;
-}
-
 .codejar-editor {
     height: 100%;
     padding-left: 8px;
+    font-family: var(--font-code);
+    &[contenteditable='false'] {
+        cursor: not-allowed;
+    }
+    :deep(.token:before) {
+        opacity: 0.4;
+    }
 }
 
-.codejar-editor :deep(.token:before) {
-    opacity: 0.2;
-}
-
-.code-jar :deep(.codejar-wrap) {
+:deep(.codejar-wrap) {
     height: 100%;
-}
-
-.code-jar :deep(.codejar-linenumbers-inner-wrap) {
-    z-index: 1;
-    position: absolute;
-    border-right: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
-}
-
-.code-jar :deep(.codejar-linenumbers) {
-    background-color: rgb(var(--v-theme-background)) !important;
-}
-
-.code-jar :deep(.codejar-linenumber) {
-    color: rgb(var(--v-theme-on-background)) !important;
-    text-align: right;
-    padding-right: 8px;
+    .codejar-linenumbers-inner-wrap {
+        height: 100%;
+        z-index: 1;
+        position: absolute;
+        border-right: 1px solid var(--border-color);
+        .codejar-linenumbers {
+            background-color: rgb(var(--v-theme-background)) !important;
+            .codejar-linenumber {
+                color: rgb(var(--v-theme-on-background)) !important;
+                text-align: right;
+                padding-right: 8px;
+            }
+        }
+    }
 }
 </style>

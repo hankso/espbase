@@ -3,49 +3,59 @@ import vue from '@vitejs/plugin-vue'
 import prismjs from 'vite-plugin-prismjs'
 import autoimport from 'unplugin-auto-import/vite'
 import components from 'unplugin-vue-components/vite'
-import compression from 'vite-plugin-compression'
-import vuedevtools from 'vite-plugin-vue-devtools'
+import ServeStatic from 'vite-plugin-serve-static'
+import VueDevTools from 'vite-plugin-vue-devtools'
 import { visualizer } from 'rollup-plugin-visualizer'
+import { compression } from 'vite-plugin-compression2'
 import vuetify, { transformAssetUrls } from 'vite-plugin-vuetify'
-import pythonServer from './src/plugins/vite-python'
+import { pythonServer } from './src/plugins/vite'
 
 // Utilities
-import { statSync } from 'node:fs'
-import { resolve } from 'node:path'
 import { execSync } from 'node:child_process'
+import { constants } from 'node:zlib'
+import { statSync, globSync } from 'node:fs'
 import { fileURLToPath, URL } from 'node:url'
-import { defineConfig, splitVendorChunkPlugin } from 'vite'
+import { join, resolve, relative } from 'node:path'
 
-// https://vitejs.dev/config/
-export default defineConfig(({ command, mode }) => {
-    let info
-    let sport = 5172 // python api server
+import { defineConfig } from 'vite'
+
+export default defineConfig(({ command }) => {
+    const base = resolve(import.meta.dirname ?? fileURLToPath(new URL('.', import.meta.url)))
+    const port = 5172                               // python api server
+    let dist = join(base, '../data/www')
+    if (!statSync(dist, { throwIfNoEntry: false })?.isDirectory())
+        dist = join(base, './dist/www')
+    let info = undefined
     if (command === 'build') {
         info = {
             NODE_JS: process.versions.node,
             BUILD_OS: `${process.platform}-${process.arch}`,
             BUILD_TIME: new Date().toLocaleString(),
         }
-        try {
-            info['SOURCE'] = `${execSync('git describe --tags --always')}`
-        } catch {}
+        try { info['SOURCE'] = `${execSync('git describe --tags --always')}` } catch {}
     }
-    let dist = resolve(__dirname, '..', 'data', 'www')
-    if (!statSync(dist, { throwIfNoEntry: false })?.isDirectory())
-        dist = './dist'
     return {
         build: {
             outDir: dist,
-            emptyOutDir: true,
             assetsDir: 'assets',
+            emptyOutDir: true,
+            reportCompressedSize: false,
+            rollupOptions: {
+                output: {
+                    manualChunks(id) {
+                        if (!id.includes('node_modules')) return
+                        if (id.includes('vuetify')) return 'vuetify'
+                        if (id.includes('axios')) return 'axios'
+                    }
+                },
+            },
         },
         server: {
             host: '0.0.0.0',
-            port: 5173,
-            sport,
+            port: port + 1,                         // 5173
             proxy: {
                 '/api': {
-                    target: `http://localhost:${sport}`,
+                    target: `http://localhost:${port}`,
                     changeOrigin: true,
                     secure: false,
                 },
@@ -55,30 +65,34 @@ export default defineConfig(({ command, mode }) => {
             'process.env': {
                 PROJECT_VERSION: process.env.npm_package_version,
                 PROJECT_NAME: process.env.npm_package_name,
-                API_SERVER: sport,
+                API_SERVER: port,
                 BUILD_INFO: info,
-                VITE_PATH: __dirname,
+                VITE_PATH: base,
                 VITE_CMD: command,
             },
         },
         plugins: [
             vue({
-                template: { transformAssetUrls }, // add more types
+                template: { transformAssetUrls },   // add more types
             }),
             vuetify(),
             prismjs({
                 languages: [
-                    'markup', // 0.8kB
-                    'json', // 0.1kB
-                    'css', // 0.1kB
-                    'js', // 1.6kB
-                    'clike', // 0.1kB
+                    'c',
+                    'js',
+                    'cpp',
+                    'css',
+                    'csv',
+                    'json',
+                    'bash',
+                    'cmake',
+                    'markup',
                 ],
                 plugins: [
-                    'previewers', // 3kB
-                    'autolinker', // 0.4kB
-                    'inline-color', // 0.5kB
-                    'show-invisibles', // 0.2kB
+                    'previewers',
+                    'autolinker',
+                    'inline-color',
+                    'show-invisibles',
                 ],
                 theme: 'default',
                 css: true,
@@ -89,26 +103,37 @@ export default defineConfig(({ command, mode }) => {
             components({
                 dts: false,
             }),
-            compression({
-                verbose: false,
-                deleteOriginFile: true,
-            }),
             visualizer({
-                template: 'treemap', // sunburst|treemap|network|raw-data|list
-                emitFile: dist === './dist',
-                gzipSize: true,
-                brotliSize: true,
+                template: 'treemap',                // sunburst|network|raw-data|list
+                emitFile: dist.startsWith(base),
+                brotliSize: true,                   // gzipSize: true,
             }),
-            vuedevtools(),
-            pythonServer({
-                entry: resolve(__dirname, '..', 'helper.py'),
-                verbose: false,
+            compression({
+                include: /\.(md|js|css|xml|html|json)$/,
+                algorithms: [
+                    'gzip',
+                    ['br', { params: { [constants.BROTLI_PARAM_QUALITY]: 11 } }],
+                ],
+                logLevel: 'silent',
+                deleteOriginalAssets: true,
+                artifacts: () => globSync(join(base, '../docs/**/*.md')).map(src => ({
+                    src, replace: () => join(dist, '../doc', relative(join(base, '../docs'), src))
+                })),
             }),
-            splitVendorChunkPlugin(),
+            ServeStatic({
+                rules: [
+                    {
+                        pattern: /^\/docs\/(.*\.md)$/,
+                        resolve: ([, match]) => join(base, '../docs', match),
+                    },
+                ],
+            }),
+            VueDevTools(),
+            pythonServer({ port, entry: join(base, '../helper.py') }),
         ],
         resolve: {
             alias: {
-                '@': fileURLToPath(new URL('./src', import.meta.url)),
+                '@': join(base, './src'),
             },
         },
     }

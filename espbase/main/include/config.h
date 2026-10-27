@@ -58,6 +58,8 @@ typedef struct {
     const char * HTTP_NAME; // Username to auth webserver
     const char * HTTP_PASS; // Password to auth webserver
     const char * AUTH_BASE; // Whether to use basic/digest authorization
+    const char * SRV_HTTPS; // Whether to use HTTP or HTTPS server
+    const char * SRV_ASYNC; // Whether to use async server handler
 } config_web_t;
 
 typedef struct {

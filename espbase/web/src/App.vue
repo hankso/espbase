@@ -16,6 +16,7 @@ import {
     mdiInformation,
     mdiCompare,
     mdiMultimedia,
+    mdiRocket,
 } from '@mdi/js'
 
 function parseLink(title, links) {
@@ -34,11 +35,10 @@ function parseLink(title, links) {
 }
 
 const aponly = parseLink('AP mode', [
+    ['Configuration', '/configs', mdiCog],
     ['File Manager', '/fileman', mdiFileTree],
     ['Online Editor', '/editor', mdiPencilBoxMultiple],
-    ['Configuration', '/configs', mdiCog],
     ['Firmware OTA', '/updation', mdiUpdate],
-    ['About', '/about', mdiInformation],
 ])
 
 const staonly = parseLink('STA mode', [
@@ -47,6 +47,8 @@ const staonly = parseLink('STA mode', [
     ['Web Gamepad', '/gamepad', mdiController],
     ['Web Socket', '/socket', mdiKeyboardOutline],
     ['Web Stream', '/stream', mdiMultimedia],
+    ['Guide', '/guide', mdiRocket],
+    ['About', '/about', mdiInformation],
 ])
 
 const desc =
@@ -63,9 +65,7 @@ const drawer = ref(false)
 const { lg } = useDisplay()
 const theme = useTheme()
 const isDark = useDark({
-    onChanged(dark) {
-        theme.global.name.value = dark ? 'dark' : 'light'
-    },
+    onChanged: dark => theme.change(dark ? 'dark' : 'light'),
 })
 
 const progbar = ref(false)
@@ -172,7 +172,10 @@ onMounted(() => {
                     </template>
                 </v-list-item>
             </v-list>
-            <v-list nav :items="staonly.concat(apmode ? aponly : [])"></v-list>
+            <v-list
+                nav
+                :items="(apmode ? aponly : []).concat(staonly)"
+            ></v-list>
         </v-navigation-drawer>
 
         <v-app-bar
@@ -213,3 +216,66 @@ onMounted(() => {
         </v-main>
     </v-app>
 </template>
+
+<style>
+*,
+*::before,
+*::after {
+    margin: 0;
+    box-sizing: border-box;
+    font-weight: normal;
+}
+
+:root {
+    --font-text:
+        -apple-system, BlinkMacSystemFont, Inter, Roboto, 'Segoe UI',
+        'Helvetica Neue', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei',
+        Arial, 'Hiragino Sans GB', system-ui, 'Lucida Console', sans-serif;
+    --font-code:
+        'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', 'Consolas',
+        'Monaco', 'Menlo', 'PingFang SC', 'Microsoft YaHei', monospace;
+    --border-color: rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+body {
+    min-height: 100vh;
+    transition:
+        color 0.5s,
+        background-color 0.5s;
+    font-size: 15px;
+    font-family: var(--font-text);
+    line-height: 1.6;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+.skip-link {
+    line-height: 100%;
+    position: absolute;
+    text-decoration: none;
+    left: 50%;
+    top: 10px;
+    z-index: 9999;
+    transform: translate(-50%, -200%); /* align center and hide to top */
+    transition: 0.5s;
+}
+
+.skip-link:focus {
+    transform: translate(-50%, 0%);
+}
+
+.hide-caret {
+    caret-color: transparent;
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+    display: none;
+}
+
+.hide-scrollbar {
+    overflow: scroll;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+</style>

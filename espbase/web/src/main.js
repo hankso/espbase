@@ -1,7 +1,3 @@
-// Styles
-import '@/assets/base.css'
-
-// Plugins
 import router from '@/router'
 import vuetify from '@/plugins/vuetify'
 import { createTerminal } from 'vue-web-terminal'

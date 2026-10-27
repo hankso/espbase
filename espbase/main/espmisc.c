@@ -385,7 +385,7 @@ void hardware_info() {
         "   Model: %s\n"
         "   Cores: %d\n"
         "Revision: %d.%d\n"
-        "Features: %s %s flash%s%s%s%s\n"
+        "Features: %s %s Flash%s%s%s%s\n"
         "   Flash: MID %02X CID %04X\n",
         Config.info.NAME, Config.info.UID,
         chip_model_str(info.model), info.cores,
@@ -525,7 +525,9 @@ void partition_info() {
         printf("No partitons found in flash. Skip");
         return;
     }
-    printf("Label        Type SubType   Offset   %-16s Used Secure\n", "Size");
+    uint8_t buf[32];
+    printf("Label        Type SubType   Offset   "
+           "Size             Used Enc SHA256[:8]\n");
     while (num--) {
         part = parts[num];
         esp_partition_subtype_t subtype = part->subtype;
@@ -540,10 +542,11 @@ void partition_info() {
 #   endif
         }
 #endif
-        printf("%-12s %-4s %-9s 0x%06" PRIX32 " 0x%06" PRIX32 " %7s %3d%% %s\n",
+        if (esp_partition_get_sha256(part, buf)) memset(buf, 0, sizeof(buf));
+        printf("%-12s %-4s %-9s 0x%06" PRIX32 " 0x%06" PRIX32 " %7s %3d%% %3s %-8.8s..\n",
                part->label, partition_type_str(part->type),
-               partition_subtype_str(part->type, subtype),
-               part->address, part->size, format_size(part->size),
-               partition_used(part), part->encrypted ? "true" : "false");
+               partition_subtype_str(part->type, subtype), part->address,
+               part->size, format_size(part->size), partition_used(part),
+               part->encrypted ? "yes" : "no", format_sha256(buf, 4));
     }
 }

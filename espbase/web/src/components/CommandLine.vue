@@ -1,7 +1,7 @@
 <template>
     <Terminal
         ref="instance"
-        class="command-line fix-terminal"
+        class="command-line"
         :key="forceUpdate"
         :name="title"
         :theme="isDark ? 'dark' : 'light'"
@@ -228,48 +228,28 @@ defineExpose({
 })
 </script>
 
-<style>
-.fix-terminal {
+<style scoped>
+:deep(.terminal) {
     min-height: 400px;
-}
-
-.fix-terminal .t-last-line {
-    /* fix vuetify css `* { margin: 0; }` */
-    margin: 1em 0;
-}
-
-.fix-terminal .t-shell-dots {
-    /* align dots position */
-    left: 2px !important;
-}
-
-.fix-terminal input,
-.fix-terminal .t-header {
-    /* fix base.css `body { line-height: 1.6; }` */
-    line-height: normal;
-}
-
-.fix-terminal .t-prompt span {
-    /* fix vuetify css `* { font-weight: normal; }` */
-    font-weight: 800;
-}
-
-.fix-terminal .t-cmd-help code,
-.fix-terminal .t-example-li code {
-    /* display \n and \t */
-    white-space: pre;
-}
-
-.fix-terminal div,
-.fix-terminal code,
-.fix-terminal .t-cmd-key,
-.fix-terminal .t-cmd-tips-content {
-    /* display ~ and ^ in mono font */
-    font-family:
-        Monaco,
-        Consolas,
-        Lucida Console,
-        'Courier New',
-        monospace;
+    .t-shell-dots {
+        /* align dots position */
+        left: 4px !important;
+    }
+    .t-prompt span {
+        /* fix vuetify css `* { font-weight: normal; }` */
+        font-weight: 800;
+    }
+    .t-cmd-help code,
+    .t-example-li code {
+        /* display \n and \t */
+        white-space: pre;
+    }
+    div,
+    code,
+    .t-cmd-key,
+    .t-cmd-tips-content {
+        /* display ~ and ^ in mono font */
+        font-family: var(--font-code);
+    }
 }
 </style>

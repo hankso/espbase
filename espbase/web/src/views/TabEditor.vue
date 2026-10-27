@@ -92,7 +92,10 @@ function upload() {
 
 watchPostEffect(() => {
     let filename = resolve('/', route.hash.slice(1))
-    if (!filename.slice(1) || path.value === filename) return
+    if (!filename.slice(1) || path.value === filename) {
+        config.value.language = extname(path.value).slice(1) || 'txt'
+        return
+    }
     readFile(filename)
         .then(resp => {
             path.value = filename
@@ -171,17 +174,18 @@ watchPostEffect(() => {
 </template>
 
 <style scoped>
-:deep(.v-btn) {
-    width: 38px;
-    height: inherit;
-    border-radius: 0;
-    margin-inline-end: 0 !important;
-    border-inline-start: thin solid
-        rgba(var(--v-border-color), var(--v-border-opacity)) !important;
-}
+:deep(.v-sheet) {
+    .v-btn {
+        width: 38px;
+        height: inherit;
+        border-radius: 0;
+        margin-inline-end: 0 !important;
+        border-inline-start: thin solid var(--border-color);
+    }
 
-:deep(.tree-view) {
-    /* FIXME: Fileman height no larger than Editor */
-    max-height: calc(100vh - 126px);
+    .tree-view {
+        /* FIXME: Fileman height no larger than Editor and sticky */
+        max-height: calc(100vh - 126px);
+    }
 }
 </style>

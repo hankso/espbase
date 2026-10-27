@@ -237,6 +237,16 @@
       "type": "string",
       "pattern": "^[01yn]?$"
     },
+    "web.srv.https": {
+      "description": "Whether to use HTTP or HTTPS server",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    },
+    "web.srv.async": {
+      "description": "Whether to use async server handler",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    },
     "app.ota.auto": {
       "description": "Enable auto updation checking",
       "type": "string",

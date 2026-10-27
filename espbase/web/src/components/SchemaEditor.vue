@@ -56,11 +56,10 @@ watch(
 .code-jar {
     max-height: 30vh;
     overflow-y: auto;
-}
-
-.code-jar + p {
-    color: #b00020;
-    font-size: 12px;
-    margin-left: 8px;
+    & + p {
+        color: #b00020;
+        font-size: 1em;
+        padding: 0.3em 0.8em;
+    }
 }
 </style>

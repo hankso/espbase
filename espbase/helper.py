@@ -542,13 +542,9 @@ def prebuild(args):
 
 
 def postbuild(args):
-    try:
-        sys.path.append(op.join(IDF_PATH, 'components/esptool_py/esptool'))
-        import esptool
-    except Exception:
+    if (esptool := shutil.which('esptool')) is None:
         return print('-- `esptool` not found. Run esp-idf/export first')
-    chip = load_chip(args)
-    if not chip:
+    if not (chip := load_chip(args)):
         return print('-- Chip target not set. Run idf.py set-target first')
     if not detools:
         return print('-- `detools` not found. Run pip install detools>=0.49')
@@ -564,43 +560,48 @@ def postbuild(args):
         shutil.copy(args.new, args.old)
         return print('-- Firmware not updated. Skip')
     with open(args.new, 'rb') as fnew, open(args.old, 'rb') as fold:
-        hashnew = hashlib.sha256(fnew.read()).hexdigest()[:8]
-        hashold = hashlib.sha256(fold.read()).hexdigest()[:8]
-        if hashnew == hashold:
+        rnew, rold = fnew.read(), fold.read()
+        newhash = hashlib.sha256(rnew[:-32]).hexdigest()
+        oldhash = hashlib.sha256(rold[:-32]).hexdigest()
+        if newhash != rnew[-32:].hex():  # sha256 not appended
+            out = execute(esptool, '--chip', chip, 'image_info', args.new)
+            newhash = findone(r'Hash: (\w+) \(valid\)', out)
+        if oldhash != rold[-32:].hex():
+            out = execute(esptool, '--chip', chip, 'image_info', args.old)
+            oldhash = findone(r'Hash: (\w+) \(valid\)', out)
+        if len(newhash) != 64 or len(oldhash) != 64:
+            return print(f'-- ELF hash not found: {args.old} => {args.new}')
+        if newhash == oldhash:
             return print('-- Firmware not updated. Skip')
     print(f'-- Running postbuild scripts ({__file__}) ...')
-    pathold, basenew = op.dirname(args.old), op.basename(args.new)
-    argv_backup, stdout_backup = sys.argv[:], sys.stdout
-    buf, sys.stdout = BytesIO(), StringIO()
     try:
-        sys.argv[1:] = ['--chip', chip, 'image_info', args.new]
-        esptool.main()
-        sys.stdout.seek(0)
-        hashimg = findone(r'Hash: (\w+) \(valid\)', sys.stdout.read())
-        if len(hashimg) != 64:
-            raise RuntimeError('Invalid sha256 from esptool: {len(hashimg)}')
+        buf = BytesIO()
         with open(args.new, 'rb') as fnew, open(args.old, 'rb') as fold:
             detools.create_patch(fold, fnew, buf, compression='heatshrink')
-            buf.seek(0)
-            patch = buf.read()
+        buf.seek(0)
+        patch = buf.read()
         pthfile = op.splitext(args.new)[0] + '.patch'
         with open(pthfile, 'wb') as f:
             f.write(struct.pack(
                 '<4s 32s I 24s',
                 hashlib.sha256(b'esp_delta_ota').digest()[3::-1],
-                bytes.fromhex(hashimg), len(patch), b''
+                bytes.fromhex(newhash), len(patch), b''
             ) + patch)
-        if not args.patch and hashold not in args.old:
-            shutil.copy(args.new, args.old)
-            shutil.copy(args.old, suffix(args.old, hashold, 'bin'))
-        if not args.patch and hashnew not in args.new:
-            shutil.copy(pthfile, op.join(pathold, suffix(basenew, f'{hashold}-{hashnew}', 'bin')))
-            shutil.copy(args.new, op.join(pathold, suffix(basenew, hashnew, 'bin')))
+        newhash, oldhash = newhash[:8], oldhash[:8]
+        newbase, oldpath = op.basename(args.new), op.dirname(args.old)
+        pthpath = op.join(oldpath, suffix(newbase, f'{oldhash}-{newhash}', 'bin'))
+        newpath = op.join(oldpath, suffix(newbase, newhash, 'bin'))
+        if not args.patch and oldhash not in args.old:
+            print('--', shutil.copy(args.old, suffix(args.old, oldhash, 'bin')))
+        if not args.patch and newhash not in args.new:
+            time.sleep(int(oldhash not in args.old))
+            print('--', shutil.copy(pthfile, pthpath))
+            time.sleep(int(newhash > oldhash))
+            print('--', shutil.copy(args.new, newpath))
+        if not args.patch and oldhash not in args.old:
+            print('--', shutil.copy(args.new, args.old))
     except (SystemExit, Exception) as e:
-        return print('-- Calculate image info failed:', e, file=sys.stderr)
-    finally:
-        sys.argv = argv_backup
-        sys.stdout = stdout_backup
+        return print('-- Calculate image info failed:', e)
 
 
 def sdkconfig_modify(text, targets, mapping):
@@ -815,7 +816,7 @@ def bonjour_browser(services, devname=None, oneshot=False, timeout=3, **k):
 
 def search(args):
     if not zeroconf:
-        return
+        return print('`zeroconf` not found. Run pip install zeroconf')
     chunks = re.findall(
         r'_?([a-zA-Z0-9\-]+)', args.service.replace('local', '')
     ) + ['tcp']
@@ -1117,10 +1118,13 @@ def on_board():
 
 def static_factory(_root):
     '''
-    1. auto append ".gz" if resolving file
-    2. auto detect "index.html" if resolving directory
+    1. auto detect "index.html" if resolving directory
+    2. auto detect Accept-Encoding if resolving file
     3. fallback to file manager if no "index.html" under dir
     '''
+    exts = {'deflate': 'gz', 'gzip': 'gz', 'zstd': 'zst'}
+    invs = dict(zip(exts.values(), exts.keys()))
+
     def on_static(filename, root=op.normpath(_root)):
         target = op.normpath(op.join(root, filename.strip('/\\')))
         try:
@@ -1132,11 +1136,14 @@ def static_factory(_root):
             return on_static(op.join(filename, 'index.html'), root)
         if op.isfile(target):
             return bottle.static_file(filename, root)
-        if op.isfile(target + '.gz'):
+        encs = bottle.request.headers.get('Accept-Encoding', '')
+        for ext in {exts.get(i, i): 0 for i in encs.replace(',', '').split()}:
+            if not op.isfile(target + '.' + ext):
+                continue
             return bottle.static_file(
-                filename + '.gz', root,
+                target + '.' + ext, root,
                 mimetype=bottle.mimetypes.guess_type(filename)[0],
-                headers={'Content-Encoding': 'gzip'})
+                headers={'Content-Encoding': invs.get(ext, ext)})
         return bottle.HTTPError(404)
     return on_static
 
@@ -1444,6 +1451,8 @@ def webserver(args):
                                       |
         [URL Query String] -> bottle.request.query
     '''
+    if bottle is None:
+        return print('`bottle` not found. Run pip install bottle')
     try:
         url = urljoin('http://', args.esphost + '/api/alive')
         assert args.esphost and requests.get(url, timeout=1).ok

@@ -65,6 +65,8 @@ config_t Config = {
         .HTTP_NAME = "",
         .HTTP_PASS = "",
         .AUTH_BASE = "n",
+        .SRV_HTTPS = "n",
+        .SRV_ASYNC = "y",
     },
     .app = {
         .OTA_AUTO  = "y",
@@ -140,10 +142,12 @@ static config_entry_t rwlst[] = {       // read/write entries
     {"web.http.name",   &Config.web.HTTP_NAME,  NULL},
     {"web.http.pass",   &Config.web.HTTP_PASS,  NULL},
     {"web.auth.base",   &Config.web.AUTH_BASE,  NULL},
+    {"web.srv.https",   &Config.web.SRV_HTTPS,  NULL},
+    {"web.srv.async",   &Config.web.SRV_ASYNC,  NULL},
 
     {"app.ota.auto",    &Config.app.OTA_AUTO,   NULL},
     {"app.ota.url",     &Config.app.OTA_URL,    NULL},
-    {"app.hbt.run",     &Config.app.HBT_RUN,   NULL},
+    {"app.hbt.run",     &Config.app.HBT_RUN,    NULL},
     {"app.hbt.url",     &Config.app.HBT_URL,    NULL},
     {"app.hid.mode",    &Config.app.HID_MODE,   NULL},
     {"app.hid.host",    &Config.app.HID_HOST,   NULL},

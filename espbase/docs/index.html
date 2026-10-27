@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Doc Viewer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css/github-markdown.min.css" />
+    <style>
+        .markdown-body {
+            box-sizing: border-box;
+            min-width: 200px;
+            max-width: 980px;
+            margin: 0 auto;
+            padding: 45px;
+        }
+        @media (max-width: 767px) {
+            .markdown-body { padding: 15px; }
+        }
+    </style>
+</head>
+<body>
+    <div id="app" class="markdown-body">Loading...</div>
+    <script>
+        // TODO: sidebar nav foot
+        marked.use({
+            gfm: true,
+            breaks: true,
+            renderer: {
+                link(token) {
+                    if (!token.href || token.href.startsWith('http')) return false
+                    let url = new URL(token.href, `http://x${location.hash.slice(1)}`)
+                    return `<a href="#${url.pathname}">${token.text}</a>`
+                },
+            },
+        })
+        function load() {
+            let path = location.hash.slice(1) || '/index'
+            fetch(`/docs${path.replace(/\.(md|html)$/i, '')}.md`)
+                .then(rep => {
+                    if (rep.ok) return rep.text()
+                    throw new Error(`${rep.status} - ${rep.statusText}`)
+                })
+                .then(raw => app.innerHTML = marked.parse(raw))
+                .catch(err => app.innerHTML = `<p>Error: ${err.message}</p>`)
+        }
+        window.addEventListener('hashchange', load)
+        window.addEventListener('DOMContentLoaded', load)
+    </script>
+</body>
+</html>

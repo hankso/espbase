@@ -161,6 +161,8 @@ static esp_err_t verify_patched(header_patched_t *header) {
     esp_err_t err = esp_partition_get_sha256(ctx.running, sha256);
     if (!err && memcmp(sha256, header->sha256, sizeof(sha256))) {
         ESP_LOGE(TAG, "Received patch is not for current firmware");
+        ESP_LOGE(TAG, "Running sha256: %s", format_sha256(sha256, 8));
+        ESP_LOGE(TAG, "Patched sha256: %s", format_sha256(header->sha256, 8));
         err = ESP_ERR_INVALID_VERSION;
     }
     return err;
@@ -308,7 +310,7 @@ bool ota_updation_url(const char *url) {
     }
     ESP_LOGI(TAG, "OTA Updation from URL `%s`", url);
 
-    char buf[512], *cert = NULL, *end = NULL;
+    char buf[512], *cert = NULL;
     esp_http_client_config_t config = {
         .url = url,
         .timeout_ms = 2000,
@@ -316,19 +318,8 @@ bool ota_updation_url(const char *url) {
     };
 
 #   ifdef CONFIG_BASE_USE_FFS
-    const char *fullpath = fjoin(2, Config.sys.DIR_DATA, "server.pem");
-    const char *stpl = "--BEGIN CERTIFICATE", *etpl = "END CERTIFICATE-----";
-    config.cert_len = 4096;             // skip files larger than 4KB
-    if (( cert = (char *)fload(fullpath, &config.cert_len) ) &&
-        ( config.cert_pem = strstr(cert, stpl) ) &&
-        ( end = strstr(config.cert_pem, etpl) )
-    ) {
-        config.cert_len = end + strlen(etpl) - config.cert_pem;
-        config.skip_cert_common_name_check = true;
-    } else {
-        config.cert_len = 0;
-        config.cert_pem = NULL;
-    }
+    cert = filesys_readcert(&config.cert_pem, &config.cert_len, NULL, NULL);
+    config.skip_cert_common_name_check = cert != NULL;
 #   endif
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -382,10 +373,11 @@ void ota_updation_info() {
         return;
     }
     printf("State   Label   Offset   Size     IDF    "
-           "SHA256[:8] Version Build time\n");
+           "ELF-Hash SHA256[:8] Version Build time\n");
     esp_err_t err;
     esp_app_desc_t desc;
     esp_ota_img_states_t state;
+    uint8_t buf[32];
     const char *dstr;
     const esp_partition_t *part, *boot = esp_ota_get_boot_partition();
     if (!boot) boot = ctx.running;
@@ -408,11 +400,12 @@ void ota_updation_info() {
         } else {
             dstr = ota_img_states[state];
         }
-        printf("%-7s %-7.7s 0x%06" PRIX32 " 0x%06" PRIX32 " %-6.6s "
-               "%-8.8s.. %7.7s %s %s\n",
-               dstr, part->label, part->address, part->size,
-               desc.idf_ver, format_sha256(desc.app_elf_sha256, 8),
-               desc.version, desc.date, desc.time);
+        if (esp_partition_get_sha256(part, buf)) memset(buf, 0, sizeof(buf));
+        printf("%-7s %-7.7s 0x%06" PRIX32 " 0x%06" PRIX32 " %-6.6s %-8.8s ",
+               dstr, part->label, part->address, part->size, desc.idf_ver,
+               format_sha256(desc.app_elf_sha256, 4));
+        printf("%-8.8s.. %7.7s %s %s\n",
+               format_sha256(buf, 4), desc.version, desc.date, desc.time);
     }
     esp_partition_iterator_release(iter);
 }

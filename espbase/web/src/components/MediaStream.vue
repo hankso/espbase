@@ -63,9 +63,9 @@ const toggle = debounce(e => {
 })
 
 function fixURL(url) {
-    if (url.includes('#')) url = url.substr(0, url.indexOf('#'))
+    if (url.includes('#')) url = url.slice(0, url.indexOf('#'))
     if (!url || !url.indexOf('?') || !url.indexOf('&')) return url
-    if (url.endsWith('&')) url = url.substr(0, url.length - 1)
+    if (url.endsWith('&')) url = url.slice(0, url.length - 1)
     if (!url.startsWith('/api'))
         url = `/api${url.startsWith('/') ? '' : '/'}${url}`
     return url

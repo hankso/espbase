@@ -7,6 +7,10 @@ export async function getSchema(name = '', opt = {}) {
     return axios.get(resolve('/', `${name ? name + '.' : ''}schema.json`), opt)
 }
 
+export async function getGuide(name, opt = {}) {
+    return axios.get(resolve('/docs/', name), opt)
+}
+
 const api = axios.create({
     baseURL: '/api/',
     timeout: 5000,

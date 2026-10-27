@@ -17,8 +17,9 @@ coverage
 __pycache__
 node_modules
 managed_components
-**/data/www/
-**/data/doc/
+**/data/bin
+**/data/www
+**/data/doc
 
 sdkconfig
 stats.html

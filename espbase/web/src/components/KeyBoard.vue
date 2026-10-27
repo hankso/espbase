@@ -1,5 +1,5 @@
 <template>
-    <div class="fix-keyboard">
+    <div class="keyboard">
         <v-textarea
             v-if="showInput"
             v-model="text"
@@ -254,41 +254,49 @@ onBeforeUnmount(() => {
 })
 </script>
 
-<style>
-.fix-keyboard .hg-button {
-    border: 0px;
-    min-width: 30px;
-    background: rgb(var(--v-theme-background));
-    font-family: monospace;
-}
-.fix-keyboard .hg-theme-default {
-    background: rgb(var(--v-theme-on-surface-variant));
-}
-.fix-keyboard .hg-button.hg-activeButton {
-    background: rgb(var(--v-theme-surface-light));
-}
-.fix-keyboard .hg-button.hg-functionBtn {
-    text-transform: capitalize;
-}
-.fix-keyboard .hg-button.hg-button-space {
-    flex-basis: 24%;
-}
-.fix-keyboard .hg-button[data-skbtn='@'] {
-    max-width: unset;
-}
-.fix-keyboard .hg-button[data-skbtn*='menu'] {
-    font-size: x-large;
-}
-.fix-keyboard .hg-button[data-skbtn*='alt'] {
-    text-decoration: v-bind('["inherit", "underline", "overline"][alt % 3]');
-}
-.fix-keyboard .hg-button[data-skbtn*='shift'] {
-    text-decoration: v-bind('["inherit", "underline", "overline"][shift % 3]');
-}
-.fix-keyboard .hg-button[data-skbtn*='control'] {
-    text-decoration: v-bind('["inherit", "underline", "overline"][ctrl % 3]');
-}
-.fix-keyboard .hg-button[data-skbtn*='lock'] {
-    text-decoration: v-bind('shift === 2 ? "overline" : "inherit"');
+<style scoped>
+.keyboard :deep(div) {
+    .hg-button {
+        border: 0px;
+        min-width: 30px;
+        background: rgb(var(--v-theme-background));
+        font-family: var(--font-code);
+    }
+    .hg-theme-default {
+        background: rgb(var(--v-theme-on-surface-variant));
+    }
+    .hg-button.hg-activeButton {
+        background: rgb(var(--v-theme-surface-light));
+    }
+    .hg-button.hg-functionBtn {
+        text-transform: capitalize;
+    }
+    .hg-button.hg-button-space {
+        flex-basis: 24%;
+    }
+    .hg-button[data-skbtn='@'] {
+        max-width: unset;
+    }
+    .hg-button[data-skbtn*='menu'] {
+        font-size: x-large;
+    }
+    .hg-button[data-skbtn*='alt'] {
+        text-decoration: v-bind(
+            '["inherit", "underline", "overline"][alt % 3]'
+        );
+    }
+    .hg-button[data-skbtn*='shift'] {
+        text-decoration: v-bind(
+            '["inherit", "underline", "overline"][shift % 3]'
+        );
+    }
+    .hg-button[data-skbtn*='control'] {
+        text-decoration: v-bind(
+            '["inherit", "underline", "overline"][ctrl % 3]'
+        );
+    }
+    .hg-button[data-skbtn*='lock'] {
+        text-decoration: v-bind('shift === 2 ? "overline" : "inherit"');
+    }
 }
 </style>

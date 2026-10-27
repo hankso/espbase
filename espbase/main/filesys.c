@@ -699,6 +699,25 @@ void * filesys_readfile(filesys_type_t type, const char *path, size_t *limit) {
     return buf;
 }
 
+char * filesys_readcert(const char **srv, size_t *slen, const char **prv, size_t *plen) {
+    size_t len = 4096;                          // skip files larger than 4KB
+    char *cert = fload(fjoin(2, Config.sys.DIR_DATA, "server.pem"), &len), *end;
+    if (!cert) return NULL;
+    const char *bct = "-----BEGIN CERTIFICATE", *ect = "END CERTIFICATE-----";
+    const char *bpv = "-----BEGIN PRIVATE KEY", *epv = "END PRIVATE KEY-----";
+    if (srv && ( *srv = strstr(cert, bct) ) && ( end = strstr(*srv, ect) )) {
+        end += strlen(ect);
+        *end = '\0';
+        if (slen) *slen = end - *srv + 1;       // include '\0'
+    }
+    if (prv && ( *prv = strstr(cert, bpv) ) && ( end = strstr(*prv, epv) )) {
+        end += strlen(epv);
+        *end = '\0';
+        if (plen) *plen = end - *prv + 1;
+    }
+    return cert;
+}
+
 #ifdef CONFIG_BASE_USE_ELF
 static esp_err_t load_elf(
     filesys_type_t type, const char *path,

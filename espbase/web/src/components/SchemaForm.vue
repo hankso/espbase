@@ -1,5 +1,5 @@
 <template>
-    <v-form class="schema-form fix-schema-form-content rounded-lg">
+    <v-form class="schema-form rounded-lg">
         <slot />
 
         <template v-for="item in items" :key="item.name">
@@ -170,30 +170,24 @@ const items = computed(() => genItem(data.value ?? scaffold(props.schema)))
     position: relative; /* for v-overlay contained */
     overflow-x: hidden;
     padding-top: 12px;
+
+    .v-list-item__append .form-values {
+        width: 25vw;
+        min-width: 100px;
+        max-width: 300px;
+        margin-left: 2em;
+        overflow-x: auto;
+        text-align: end;
+    }
+
+    .v-overlay {
+        z-index: 999 !important; /* put it below v-app-bar */
+    }
 }
 
-.v-overlay {
-    z-index: 999 !important; /* put it below v-app-bar */
-}
-</style>
-
-<style>
-.v-list-item__append .form-values {
-    width: 25vw;
-    min-width: 100px;
-    max-width: 300px;
-    margin-left: 2em;
-    overflow-x: auto;
-    text-align: end;
-}
-
-.fix-schema-form-content .v-overlay__content {
+:deep(.v-overlay__content) {
     position: static;
     margin: 4em;
     width: calc(100% - 8em);
-}
-
-.fix-schema-form-content .v-list-item-subtitle {
-    word-break: auto-phrase;
 }
 </style>

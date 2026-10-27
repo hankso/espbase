@@ -9,7 +9,9 @@ export function getMonotonic() {
 }
 
 export function randomId(length = 8) {
-    return Math.random().toString(16).substr(2, length)
+    return Math.random()
+        .toString(16)
+        .slice(2, 2 + length)
 }
 
 export function range(start, end) {
@@ -20,7 +22,7 @@ export function range(start, end) {
     return [...Array(end - start).keys()].map(i => i + start)
 }
 
-export var type = (function () {
+export const type = (() => {
     let cache = {}
     return obj => {
         if (obj === null) return 'null'
@@ -64,7 +66,7 @@ export function parseNum(str) {
     return isFinite(num) ? num : null
 }
 
-export var formatSize = (function () {
+export const formatSize = (() => {
     let units = 'BKMGTP'
     let decimals = [0, 1, 2, 3, 3, 3]
     return (size, base = 1024) => {
@@ -193,7 +195,7 @@ export function toggleFullscreen(e) {
     }
 }
 
-export var rules = {
+export const rules = {
     inRange(r0 = 0, r1 = 255) {
         return v =>
             (r0 <= v && v <= r1) || `Must be a number between ${r0} - ${r1}`
@@ -218,7 +220,5 @@ export var rules = {
     },
 }
 
-import cvtcase from './cvtcase'
-import strftime from './strftime'
-
-export { cvtcase, strftime }
+export { default as cvtcase } from './cvtcase'
+export { default as strftime } from './strftime'

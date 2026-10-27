@@ -6,7 +6,6 @@
         false-value="0"
         hide-details
         v-model="proxy"
-        class="fix-schema-boolean-align"
     ></v-switch>
 </template>
 
@@ -38,8 +37,8 @@ const proxy = computed({
 })
 </script>
 
-<style>
-.fix-schema-boolean-align .v-selection-control {
+<style scoped>
+:deep(.v-selection-control) {
     justify-content: end;
 }
 </style>

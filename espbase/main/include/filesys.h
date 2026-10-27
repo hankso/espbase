@@ -75,6 +75,7 @@ void filesys_pstat(filesys_type_t, const char *);
 void filesys_listdir(filesys_type_t, const char *, FILE *stream);
 char * filesys_listdir_json(filesys_type_t, const char *); // need free
 void * filesys_readfile(filesys_type_t, const char *, size_t *); // need free
+char * filesys_readcert(const char **srv, size_t *slen, const char **prv, size_t *plen);
 esp_err_t filesys_readelf(filesys_type_t, const char *, int verbose); // 0-4
 esp_err_t filesys_execute(filesys_type_t, const char *, int argc, char **argv);
 esp_err_t filesys_dlcall(filesys_type_t, const char *, const char *func, int argc, char **argv);

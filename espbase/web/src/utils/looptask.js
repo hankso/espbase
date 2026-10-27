@@ -9,7 +9,7 @@ import { strftime, getMonotonic } from '@/utils'
 //   - Opera Presto
 //   - IE Trident?
 //   - Fallback function
-export var requestAnimationFrame =
+export const requestAnimationFrame =
     window.requestAnimationFrame ||
     window.webkitRequestAnimationFrame ||
     window.mozRequestAnimationFrame ||
@@ -17,7 +17,7 @@ export var requestAnimationFrame =
     window.msRequestAnimationFrame ||
     (callback => window.setTimeout(callback, 17))
 
-export var cancelAnimationFrame =
+export const cancelAnimationFrame =
     window.cancelAnimationFrame ||
     window.webkitCancelAnimationFrame ||
     window.mozCancelAnimationFrame ||
@@ -25,7 +25,7 @@ export var cancelAnimationFrame =
     window.msCancelAnimationFrame ||
     window.clearTimeout
 
-export function getFPS(frames = 5, verbose = true) {
+export async function getFPS(frames = 5, verbose = true) {
     let cache = []
     return new Promise((resolve, reject) => {
         if (frames <= 1) return reject('Invalid frame number')

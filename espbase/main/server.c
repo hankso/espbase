@@ -13,19 +13,22 @@
 #include "console.h"            // for console_handle_xxx
 #include "timesync.h"           // for format_datetime
 
+#include "esp_tls.h"
 #include "esp_rom_md5.h"
-#include "esp_http_server.h"
+#include "esp_https_server.h"
 
 #if defined(CONFIG_BASE_USE_WEBSERVER) && defined(CONFIG_BASE_USE_WIFI)
 
 #define ESP_ERR_HTTPD_AUTH_DIGEST   (ESP_ERR_HTTPD_BASE + 10)
 #define ESP_ERR_HTTPD_SKIP_DATA     (ESP_ERR_HTTPD_BASE + 11)
+#define ESP_HTTPD_ASYNC_CONTINUE    (ESP_ERR_HTTPD_BASE + 12)
 
 #define FLAG_AP_ONLY    BIT0
 #define FLAG_NEED_AUTH  BIT1
-#define FLAG_DIR_DATA   BIT2
-#define FLAG_DIR_DOCS   BIT3
-#define FLAG_DIR_HTML   BIT4
+#define FLAG_RUN_ASYNC  BIT2
+#define FLAG_DIR_DATA   BIT3
+#define FLAG_DIR_DOCS   BIT4
+#define FLAG_DIR_HTML   BIT5
 
 #define CHUNK_SIZE 2048
 
@@ -269,13 +272,20 @@ static bool auth_validate(http_auth_t *ctx, const char *method, char *resp) {
     return (strtol(vals[6], NULL, 0) + 86400) > get_timestamp_us(NULL);
 }
 
-static const char * get_static(const char *path) {
+static bool get_static(const char *path, filesys_path_t out) {
     // 1. search default file "index.html" under folder
-    // 2. try to append ".gz" if origin filename is not found
-    static char buf[PATH_MAX_LEN + 3]; // 3 for ".gz"
-    fnormr(buf, path);
-    if (fisdir(buf)) fjoinr(buf, 2, buf, "index.html");
-    return (fisfile(buf) || fisfile(strcat(buf, ".gz"))) ? buf : NULL;
+    // 2. try to append ".gz|.br|.zst" if origin filename is not found
+    static const char * exts[] = {".gz", ".br", ".zst"};
+    fnormr(out, path);
+    if (fisdir(out)) fjoinr(out, 2, out, "index.html");
+    if (fisfile(out)) return true;
+    char *end = out + strlen(out);
+    ITERV(ext, exts) {
+        // TODO: check Accept-Encoding header
+        strcpy(end, ext);
+        if (fisfile(out)) return true;
+    }
+    return false;
 }
 
 static char * get_header(httpd_req_t *req, const char *key) {
@@ -326,11 +336,13 @@ static esp_err_t send_err(httpd_req_t *req, int code, const char *msg) {
 }
 
 static const char * guess_type(const char *filename) {
-    const char *ext = strrchr(filename, '.');
+    const char *ext = strrchr(filename, '.'), *prev = NULL;
     if (!ext || !*++ext)  return CTYPE_TEXT;
-    if (!strcmp(ext, "gz")) {
-        char *prev = memrchr(filename, '.', ext - filename - 1);
-        if (!prev) return "application/x-gzip";
+    if (!strcmp(ext, "br") || !strcmp(ext, "gz") || !strcmp(ext, "zst")) {
+        if (!( prev = memrchr(filename, '.', ext - filename - 1) ))
+            return !strcmp(ext, "gz")
+                ? "application/x-gzip" : !strcmp(ext, "br")
+                ? "application/x-br" : "application/x-zstd";
         ext = prev + 1;
     }
     if (startswith(ext, "htm"))  return CTYPE_HTML;
@@ -372,8 +384,13 @@ static esp_err_t send_file(httpd_req_t *req, const char *path, bool dl) {
     if (dl) httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     sprintf(cdis, "%s; filename=\"%s\"", dl ? "attachment" : "inline", buf);
     httpd_resp_set_hdr(req, "Content-Disposition", cdis);
-    if (endswith(basename, ".gz"))
+    if (endswith(basename, ".br")) {
+        httpd_resp_set_hdr(req, "Content-Encoding", "br");
+    } else if (endswith(basename, ".gz")) {
         httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    } else if (endswith(basename, ".zst")) {
+        httpd_resp_set_hdr(req, "Content-Encoding", "zstd");
+    }
     if (st.st_size) {
         snprintf(clen, sizeof(clen), "%ld", st.st_size);
         httpd_resp_set_hdr(req, "Content-Length", clen);
@@ -530,11 +547,45 @@ static void log_param(httpd_req_t *req) {
     }
 }
 
-#define CHECK_REQUEST(req)                                                  \
+#define CHECK_REQUEST(req, func)                                            \
     do {                                                                    \
-        esp_err_t err = check_request(req);                                 \
-        if (err) return err < 0 ? ESP_FAIL : ESP_OK;                        \
+        esp_err_t err = check_async(req, func);                             \
+        if (err != ESP_HTTPD_ASYNC_CONTINUE) return err;                    \
+        if (( err = check_request(req) )) return err < 0 ? ESP_FAIL : ESP_OK; \
     } while (0)
+
+typedef esp_err_t (*httpd_hdl_t)(httpd_req_t *);
+
+typedef struct {
+    httpd_req_t *req;
+    httpd_hdl_t func;
+} http_async_t;
+
+static TaskHandle_t async_tasks[3];
+static QueueHandle_t async_queue = NULL;
+static filesys_path_t INDEX_HTML;
+
+static esp_err_t check_async(httpd_req_t *req, httpd_hdl_t func) {
+    if (!async_queue) return ESP_HTTPD_ASYNC_CONTINUE;
+    bool is_async = false;
+    TaskHandle_t handle = xTaskGetCurrentTaskHandle();
+    ITERV(task, async_tasks) {
+        if (task != handle) continue;
+        is_async = true;
+        break;
+    }
+    if (!is_async && (int)req->user_ctx & FLAG_RUN_ASYNC) {
+        httpd_req_t *copy = NULL;
+        esp_err_t err = httpd_req_async_handler_begin(req, &copy);
+        if (err) return send_err(req, 500, esp_err_to_name(err));
+        http_async_t arg = { copy, func };
+        if (xQueueSend(async_queue, &arg, TIMEOUT(100))) return ESP_OK;
+        httpd_req_async_handler_complete(copy);
+        httpd_resp_set_status(req, "503 Busy");
+        return send_str(req, NULL);
+    }
+    return ESP_HTTPD_ASYNC_CONTINUE;
+}
 
 static esp_err_t check_request(httpd_req_t *req) {
     log_msg(req);
@@ -608,15 +659,14 @@ static esp_err_t check_request(httpd_req_t *req) {
 
 static esp_err_t on_error(httpd_req_t *req, httpd_err_code_t err) {
     if (req->method == HTTP_OPTIONS) return send_str(req, NULL);
-    const char *index = get_static(Config.sys.DIR_HTML);
-    if (index) return send_file(req, index, false);
+    if (strlen(INDEX_HTML)) return send_file(req, INDEX_HTML, false);
     return send_err(req, 404, ERROR_HTML);
 }
 
 static esp_err_t on_success(httpd_req_t *req) {
-    CHECK_REQUEST(req);
+    CHECK_REQUEST(req, on_success);
 #ifdef CONFIG_BASE_DEBUG
-    size_t nfd = 8;
+    size_t nfd = CONFIG_LWIP_MAX_SOCKETS;
     int fds[nfd];
     if (httpd_get_client_list(req->handle, &nfd, fds) || !nfd) return ESP_OK;
     ESP_LOGI(TAG, "Got %d clients", nfd);
@@ -628,7 +678,7 @@ static esp_err_t on_success(httpd_req_t *req) {
 }
 
 static esp_err_t on_command(httpd_req_t *req) {
-    CHECK_REQUEST(req);
+    CHECK_REQUEST(req, on_command);
     if (!req->content_len || req->content_len > CHUNK_SIZE)
         return send_err(req, 400, "Invalid content length");
     log_param(req);
@@ -688,12 +738,12 @@ error:
 }
 
 static esp_err_t on_editor(httpd_req_t *req) {
-    CHECK_REQUEST(req);
+    CHECK_REQUEST(req, on_editor);
     if (req->method == HTTP_POST) return parse_files(req, on_upload_file);
     const char *type = get_param(req, "type", FROM_ANY) ?: "";
     const char *path = fnorm(get_param(req, "path", FROM_ANY));
     if (EMPTY(path)) {
-        if (req->method == HTTP_GET && get_static(Config.sys.DIR_HTML))
+        if (req->method == HTTP_GET && strlen(INDEX_HTML))
             return redirect(req, "/editor");        // spa router
         return send_err(req, 400, "No path specified");
     }
@@ -730,7 +780,7 @@ static esp_err_t on_editor(httpd_req_t *req) {
 }
 
 static esp_err_t on_config(httpd_req_t *req) {
-    CHECK_REQUEST(req);
+    CHECK_REQUEST(req, on_config);
     if (req->method == HTTP_POST) {
         const char *json = get_param(req, "json", FROM_BODY);
         if (json && config_loads(json) != ESP_OK) {
@@ -775,9 +825,9 @@ error:
 }
 
 static esp_err_t on_update(httpd_req_t *req) {
-    CHECK_REQUEST(req);
+    CHECK_REQUEST(req, on_update);
     if (req->method == HTTP_GET) {
-        if (!has_param(req, "raw", FROM_ANY) && get_static(Config.sys.DIR_HTML))
+        if (!has_param(req, "raw", FROM_ANY) && strlen(INDEX_HTML))
             return redirect(req, "/updation");      // spa router
         return send_str(req, UPDATE_HTML);
     }
@@ -800,7 +850,7 @@ static esp_err_t on_update(httpd_req_t *req) {
 }
 
 static esp_err_t on_static(httpd_req_t *req) {
-    CHECK_REQUEST(req);
+    CHECK_REQUEST(req, on_static);
     int flag = (int)req->user_ctx;
     const char *dirname = "/", *uri = req->uri;
     if (flag & FLAG_DIR_DATA && strlen(Config.sys.DIR_DATA)) {
@@ -815,25 +865,29 @@ static esp_err_t on_static(httpd_req_t *req) {
     char basename[strcspn(uri, "?#") + 1];    // VLA < CONFIG_HTTPD_MAX_URI_LEN
     strlcpy(basename, uri, sizeof(basename)); // truncate and pad null
     if (startswith(basename, dirname)) dirname = NULL;
-    const char *path = get_static(fjoin(2, dirname, basename));
-    return path ? send_file(req, path, 0) : on_error(req, HTTPD_404_NOT_FOUND);
+    filesys_path_t path;
+    if (get_static(fjoin(2, dirname, basename), path))
+        return send_file(req, path, 0);
+    return on_error(req, HTTPD_404_NOT_FOUND);
 }
 
 typedef struct {
     int fd;
     bool stop, once;
     char addr[ADDRSTRLEN];
+    void (*callback)(void *arg);
+    httpd_handle_t handle;
     esp_event_handler_instance_t inst;
 } http_media_t;
 
-static UNUSED int socket_send_all(int fd, void *buf, size_t len) {
+static UNUSED int socket_send_all(http_media_t *ctx, void *buf, size_t len) {
     int ret = 0;
-    while (len > 0 && fd > 0) {
-        if (( ret = httpd_socket_send(server, fd, buf, len, 0) ) < 0) break;
+    while (len > 0 && ctx->fd > 0) {
+        if (( ret = httpd_socket_send(ctx->handle, ctx->fd, buf, len, 0) ) < 0) break;
         buf += ret;
         len -= ret;
     }
-    if (len || ret < 0) ESP_LOGD(TAG, "fd %d, len %d, ret %d", fd, len, ret);
+    if (len || ret < 0) ESP_LOGD(TAG, "fd %d, len %d, ret %d", ctx->fd, len, ret);
     return MIN(ret, 0);
 }
 
@@ -844,7 +898,7 @@ static void handle_audio_streaming(void *arg) {
     audio_data_t *pkt = arg;
     notify_increase(pkt->task);
     if (!pkt->len) goto stop;
-    if (!socket_send_all(audio_ctx.fd, pkt->data, pkt->len)) goto exit;
+    if (!socket_send_all(&audio_ctx, pkt->data, pkt->len)) goto exit;
 stop:
     UREGEVTS(AVC, audio_ctx.inst);
     if (audio_ctx.stop) AUDIO_STOP();
@@ -868,11 +922,11 @@ static void handle_video_streaming(void *arg) {
         "Content-Type: image/jpeg\r\n"
         "Content-Length: ";
     int blen = 51 + snprintf(bdary + 51, 15, "%d\r\n\r\n", pkt->len);
-    if (!socket_send_all(video_ctx.fd, bdary, blen) &&
-        !socket_send_all(video_ctx.fd, pkt->data, pkt->len) &&
+    if (!socket_send_all(&video_ctx, bdary, blen) &&
+        !socket_send_all(&video_ctx, pkt->data, pkt->len) &&
         !video_ctx.once) goto exit;
     if (video_ctx.once) {
-        httpd_sess_trigger_close(server, video_ctx.fd);
+        httpd_sess_trigger_close(video_ctx.handle, video_ctx.fd);
         video_ctx.fd = 0;
     }
 stop:
@@ -885,18 +939,22 @@ exit:
 #endif
 
 #ifdef CONFIG_BASE_USE_AVC
-static void on_media_data(void *func, esp_event_base_t b, int32_t i, void *p) {
+static void on_media_data(void *ctx, esp_event_base_t b, int32_t i, void *ppkt) {
     // this function is called in sys_evt task
     // recv data from capture task
     // send data to httpd task
-    httpd_queue_work(server, func, *(void **)p);
+    httpd_queue_work(
+        ((http_media_t *)ctx)->handle,
+        ((http_media_t *)ctx)->callback,
+         *(void **)ppkt
+    );
     return; NOTUSED(b); NOTUSED(i);
 }
 #endif
 
 static esp_err_t on_media(httpd_req_t *req) {
     // FIXME: cannot handle video and audio simultaneously
-    CHECK_REQUEST(req);
+    CHECK_REQUEST(req, on_media);
     if (has_param(req, "video", FROM_ANY)) {
 #ifndef CONFIG_BASE_USE_CAM
         send_err(req, 403, "Video stream not available");
@@ -926,14 +984,16 @@ static esp_err_t on_media(httpd_req_t *req) {
             "Content-Type: multipart/x-mixed-replace;boundary=FRAME\r\n"
             "Cache-Control: no-store\r\n"
             "X-Framerate: 60\r\n\r\n";
-        int fd = video_ctx.fd = httpd_req_to_sockfd(req);
-        httpd_socket_send(req->handle, fd, resp, strlen(resp), 0);
-        REGEVTS(AVC, on_media_data, handle_video_streaming, &video_ctx.inst);
+        video_ctx.fd = httpd_req_to_sockfd(req);
+        video_ctx.handle = req->handle;
+        video_ctx.callback = handle_video_streaming;
+        httpd_socket_send(req->handle, video_ctx.fd, resp, strlen(resp), 0);
+        REGEVTS(AVC, on_media_data, &video_ctx, &video_ctx.inst);
         if (!video_ctx.inst) return ESP_FAIL;
         video_ctx.stop = xTaskGetHandle("video") == NULL;
         video_ctx.once = has_param(req, "still", FROM_ANY);
         VIDEO_START(-1);
-        strlcpy(video_ctx.addr, getaddrname(fd, false), ADDRSTRLEN);
+        strlcpy(video_ctx.addr, getaddrname(video_ctx.fd, false), ADDRSTRLEN);
         ESP_LOGI(TAG, "Video stream to %s started", video_ctx.addr);
 #endif
     } else if (has_param(req, "audio", FROM_ANY)) {
@@ -947,13 +1007,15 @@ static esp_err_t on_media(httpd_req_t *req) {
             "HTTP/1.1 200 OK\r\n"
             "Content-Type: audio/wav\r\n"
             "Cache-Control: no-store\r\n\r\n";
-        int fd = audio_ctx.fd = httpd_req_to_sockfd(req);
-        httpd_socket_send(req->handle, fd, resp, strlen(resp), 0);
-        REGEVTS(AVC, on_media_data, handle_audio_streaming, &audio_ctx.inst);
+        audio_ctx.fd = httpd_req_to_sockfd(req);
+        audio_ctx.handle = req->handle;
+        audio_ctx.callback = handle_audio_streaming;
+        httpd_socket_send(req->handle, audio_ctx.fd, resp, strlen(resp), 0);
+        REGEVTS(AVC, on_media_data, &audio_ctx, &audio_ctx.inst);
         if (!audio_ctx.inst) return ESP_FAIL;
         audio_ctx.stop = xTaskGetHandle("audio") == NULL;
         AUDIO_START(-1);
-        strlcpy(audio_ctx.addr, getaddrname(fd, false), ADDRSTRLEN);
+        strlcpy(audio_ctx.addr, getaddrname(audio_ctx.fd, false), ADDRSTRLEN);
         ESP_LOGI(TAG, "Audio stream to %s started", audio_ctx.addr);
 #endif
     } else {
@@ -963,11 +1025,18 @@ static esp_err_t on_media(httpd_req_t *req) {
 }
 
 #ifdef CONFIG_HTTPD_WS_SUPPORT
-static void handle_websocket_message(void *arg) {
-    httpd_ws_frame_t *pkt = arg;
-    if (!pkt) return;
-    if (pkt->payload) {
-        int fd = *(int *)(pkt->payload + pkt->len + 1);
+static esp_err_t on_websocket(httpd_req_t *req) {
+    if (req->method == HTTP_GET) return ESP_OK;     // handshake done
+    esp_err_t err = check_async(req, on_websocket);
+    if (err != ESP_HTTPD_ASYNC_CONTINUE) return err;
+    httpd_ws_frame_t *pkt = NULL;
+    if (!( err = ECALLOC(pkt, 1, sizeof(httpd_ws_frame_t)) ) &&
+        !( err = httpd_ws_recv_frame(req, pkt, 0) ) &&
+        ( pkt->type == HTTPD_WS_TYPE_TEXT ) &&
+        ( pkt->len < (2 * CHUNK_SIZE) && pkt->final ) &&
+        !( err = ECALLOC(pkt->payload, 1, pkt->len + 1) ) &&
+        !( err = httpd_ws_recv_frame(req, pkt, pkt->len) )
+    ) {
         char *ret = pkt->payload[0] == '{' ?
                     console_handle_jsonrpc((char *)pkt->payload, -1) :
                     console_handle_command((char *)pkt->payload, true, false);
@@ -977,44 +1046,74 @@ static void handle_websocket_message(void *arg) {
                 .type = HTTPD_WS_TYPE_TEXT,
                 .payload = (uint8_t *)ret, .len = strlen(ret)
             };
-            httpd_ws_send_frame_async(server, fd, &rep);
+            httpd_ws_send_frame(req, &rep);
             free(ret);
         }
-        free(pkt->payload);
     }
-    free(pkt);
-}
-
-static esp_err_t on_websocket(httpd_req_t *req) {
-    esp_err_t err = ESP_OK;
-    if (req->method == HTTP_GET) return err;        // handshake done
-    httpd_ws_frame_t *pkt = NULL;
-    if (( err = ECALLOC(pkt, 1, sizeof(httpd_ws_frame_t)) ) ||
-        ( err = httpd_ws_recv_frame(req, pkt, 0) ) ||
-        ( pkt->type != HTTPD_WS_TYPE_TEXT ) ||
-        ( pkt->len > (2 * CHUNK_SIZE) || !pkt->final ) ||
-        ( err = ECALLOC(pkt->payload, 1, pkt->len + 1 + sizeof(int)) ) ||
-        ( err = httpd_ws_recv_frame(req, pkt, pkt->len) )
-    ) {
-        if (pkt) TRYFREE(pkt->payload);
-        TRYFREE(pkt);
-        return err;
-    }
-    *(int *)(pkt->payload + pkt->len + 1) = httpd_req_to_sockfd(req);
-    return httpd_queue_work(req->handle, handle_websocket_message, pkt);
+    if (pkt) TRYFREE(pkt->payload);
+    TRYFREE(pkt);
+    return err;
 }
 #endif
+
+static void on_https_error(void *a, esp_event_base_t b, int32_t i, void *data) {
+    if (b != ESP_HTTPS_SERVER_EVENT || i != HTTPS_SERVER_EVENT_ERROR) return;
+    esp_https_server_last_error_t *err = (esp_tls_last_error_t *)data;
+    if (err->last_error) {
+        ESP_LOGE(TAG, "HTTPS error: %s tls %d flag %d",
+                 esp_err_to_name(err->last_error),
+                 err->esp_tls_error_code, err->esp_tls_flags);
+    }
+}
+
+static void on_https_session(esp_https_server_user_cb_arg_t *cb) {
+#ifdef CONFIG_ESP_TLS_USING_MBEDTLS
+    mbedtls_ssl_context *ctx = NULL;
+#endif
+    int sockfd = -1, size = 1024;
+    char *buf = NULL;
+    esp_err_t err = ESP_OK;
+    const mbedtls_x509_crt *cert;
+    switch (cb->user_cb_state) {
+    case HTTPD_SSL_USER_CB_SESS_CREATE:
+        if (!( err = esp_tls_get_conn_sockfd(cb->tls, &sockfd) )) {
+            ESP_LOGD(TAG, "Socket fd: %d", sockfd);
+        } else {
+            ESP_LOGE(TAG, "Get fd from tls context: %s", esp_err_to_name(err));
+        }
+#ifdef CONFIG_ESP_TLS_USING_MBEDTLS
+        if (!( ctx = (mbedtls_ssl_context *)esp_tls_get_ssl_context(cb->tls) )) {
+            ESP_LOGE(TAG, "Get ssl from tls context: %s", esp_err_to_name(err));
+        } else {
+            ESP_LOGD(TAG, "SSL Ciphersuite: %s", mbedtls_ssl_get_ciphersuite(ctx));
+        }
+#endif
+        break;
+    case HTTPD_SSL_USER_CB_SESS_CLOSE:
+#ifdef CONFIG_ESP_TLS_USING_MBEDTLS
+        if (!( ctx = (mbedtls_ssl_context *)esp_tls_get_ssl_context(cb->tls) )) {
+            ESP_LOGE(TAG, "Get ssl from tls context: %s", esp_err_to_name(err));
+        } else if (!( cert = mbedtls_ssl_get_peer_cert(ctx) )) {
+            ESP_LOGW(TAG, "Could not get peer cert info");
+        } else if (( err = ECALLOC(buf, 1, size) )) {
+            ESP_LOGE(TAG, "Parse cert info: %s", esp_err_to_name(err));
+        } else {
+            mbedtls_x509_crt_info(buf, size - 1, "    ", cert);
+            ESP_LOGI(TAG, "Peer cert info: %s", buf);
+            free(buf);
+        }
+#endif
+        break;
+    default:
+        ESP_LOGE(TAG, "Illegal state");
+        break;
+    }
+}
 
 bool rewrite_api(const char *tpl, const char *uri, size_t len) {
     // Rewrite "/api/xxx" to "/xxx"
     if (startswith(uri, "/api/")) { uri += 4; len -= 4; }
     return httpd_uri_match_wildcard(tpl, uri, len);
-}
-
-void server_initialize() {
-    esp_log_level_set("httpd_uri", ESP_LOG_ERROR);
-    esp_log_level_set("httpd_txrx", ESP_LOG_ERROR);
-    server_loop_begin();
 }
 
 #ifndef CONFIG_HTTPD_WS_SUPPORT
@@ -1053,14 +1152,14 @@ void server_initialize() {
 // Use `httpd_req_t.sess_ctx` to store `http_param_t *` which is auto released
 // Use `httpd_req_t.user_ctx` to store `FLAG_XXXs` which is never released
 void server_loop_begin() {
-    if (server) return;
+    server_loop_end();
 
     httpd_uri_t apis[] = {
         // WebSocket APIs
-        WS_API("/ws", on_websocket, NULL),
+        WS_API("/ws", on_websocket, FLAG_RUN_ASYNC),
         // STA APIs
         HTTP_API("/alive",  GET,    on_success, NULL),
-        HTTP_API("/exec",   POST,   on_command, FLAG_NEED_AUTH),
+        HTTP_API("/exec",   POST,   on_command, FLAG_RUN_ASYNC | FLAG_NEED_AUTH),
         HTTP_API("/media",  GET,    on_media,   FLAG_NEED_AUTH),
         HTTP_API("/media",  POST,   on_media,   FLAG_NEED_AUTH),
         // AP APIs
@@ -1074,20 +1173,41 @@ void server_loop_begin() {
         HTTP_API("/update", POST,   on_update,  FLAG_AP_ONLY | FLAG_NEED_AUTH),
         HTTP_API("/apmode", GET,    on_success, FLAG_AP_ONLY),
         // Static files
-        HTTP_API("/data/*", GET,    on_static,  FLAG_DIR_DATA | FLAG_AP_ONLY),
-        HTTP_API("/docs/*", GET,    on_static,  FLAG_DIR_DOCS),
-        HTTP_API("/*",      GET,    on_static,  FLAG_DIR_HTML),
+        HTTP_API("/data/*", GET,    on_static,  FLAG_RUN_ASYNC | FLAG_DIR_DATA | FLAG_AP_ONLY),
+        HTTP_API("/docs/*", GET,    on_static,  FLAG_RUN_ASYNC | FLAG_DIR_DOCS),
+        HTTP_API("/*",      GET,    on_static,  FLAG_RUN_ASYNC | FLAG_DIR_HTML),
     };
 
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.stack_size = 8192;
-    config.lru_purge_enable = true;
-    config.enable_so_linger = true;
-    config.max_open_sockets = 12;
-    config.max_uri_handlers = LEN(apis);
-    config.uri_match_fn = rewrite_api;
-    config.global_user_ctx = auth_init();
-    config.global_user_ctx_free_fn = free;
+    httpd_ssl_config_t config = HTTPD_SSL_CONFIG_DEFAULT();
+    int stack_ratio = strtob(Config.web.SRV_ASYNC) ? 6 : 10;
+    config.httpd.stack_size = MAX(CHUNK_SIZE * 2, 1024 * stack_ratio);
+    config.httpd.enable_so_linger = true;
+    config.httpd.max_open_sockets = 10; // CONFIG_LWIP_MAX_SOCKETS=16
+    config.httpd.max_uri_handlers = LEN(apis);
+    config.httpd.max_resp_headers = 8;
+    config.httpd.recv_wait_timeout = 8;
+    config.httpd.send_wait_timeout = 8;
+    config.httpd.backlog_conn = 16;
+    config.httpd.uri_match_fn = rewrite_api;
+    config.httpd.global_user_ctx = auth_init();
+    config.user_cb = on_https_session;
+
+#ifdef CONFIG_BASE_USE_FFS
+    static char *cert = NULL;
+    TRYFREE(cert);
+    if (!strtob(Config.web.SRV_HTTPS) || !( cert = filesys_readcert(
+        (const char **)&config.servercert, &config.servercert_len,
+        (const char **)&config.prvtkey_pem, &config.prvtkey_len
+    ))) {
+        config.transport_mode = HTTPD_SSL_TRANSPORT_INSECURE;
+        ESP_LOGI(TAG, "Using insecure transport mode");
+    } else {
+        ESP_LOGD(TAG, "Server cert len: %d\n%.*s", config.servercert_len,
+                 config.servercert_len, config.servercert);
+        ESP_LOGD(TAG, "Private key len: %d\n%.*s", config.prvtkey_len,
+                 config.prvtkey_len, config.prvtkey_pem);
+    }
+#endif
 
     // Call stack: httpd_start => httpd_thread => httpd_server => select
     // If select rfds:
@@ -1096,11 +1216,16 @@ void server_loop_begin() {
     //      3. httpd_process_session  => uri->handler(req)
     // So avoid using infinite loop in uri handlers.
     // Use httpd_queue_work instead.
-    esp_err_t err = httpd_start(&server, &config);
+    esp_err_t err = httpd_ssl_start(&server, &config);
     if (err) {
         ESP_LOGE(TAG, "Start server failed: %s", esp_err_to_name(err));
     } else {
-        ESP_LOGI(TAG, "Start server on port %d", config.server_port);
+        REGEVT(ESP_HTTPS_SERVER, &on_https_error);
+        if (config.transport_mode == HTTPD_SSL_TRANSPORT_SECURE) {
+            ESP_LOGI(TAG, "Start HTTPS server on port %d", config.port_secure);
+        } else {
+            ESP_LOGI(TAG, "Start HTTP server on port %d", config.port_insecure);
+        }
         ITERP(api, apis) {
             if (( err = httpd_register_uri_handler(server, api) )) {
                 ESP_LOGE(TAG, "Register uri `%s` failed: %s",
@@ -1112,7 +1237,46 @@ void server_loop_begin() {
     }
 }
 
-void server_loop_end() { TRYNULL(server, httpd_stop); }
+void server_loop_end() { TRYNULL(server, httpd_ssl_stop); }
+
+static void async_task(void *p) {
+    esp_err_t err;
+    http_async_t arg;
+    while (true) {
+        if (!xQueueReceive(async_queue, &arg, portMAX_DELAY)) continue;
+        arg.func(arg.req);
+        if (( err = httpd_req_async_handler_complete(arg.req) ))
+            ESP_LOGE(TAG, "Async handler complete failed: %s", esp_err_to_name(err));
+    }
+    vTaskDelete(NULL);
+}
+
+void server_initialize() {
+    if (strtob(Config.web.SRV_ASYNC)) {
+        async_queue = xQueueCreate(LEN(async_tasks), sizeof(http_async_t));
+        if (!async_queue) {
+            ESP_LOGE(TAG, "Create async queue failed");
+            return;
+        }
+        char name[16];
+        LOOPN(i, LEN(async_tasks)) {
+            snprintf(name, sizeof(name), "async task %d", i);
+            if (xTaskCreate(async_task, name, 8192, NULL, 5, async_tasks + i))
+                continue;
+            ESP_LOGE(TAG, "Create async task failed");
+            LOOPN(j, LEN(async_tasks)) {
+                TRYNULL(async_tasks[i], vTaskDelete);
+            }
+            TRYNULL(async_queue, vQueueDelete);
+            return;
+        }
+    }
+    if (!get_static(Config.sys.DIR_HTML, INDEX_HTML)) INDEX_HTML[0] = '\0';
+    esp_log_level_set("httpd_uri", ESP_LOG_ERROR);
+    esp_log_level_set("httpd_txrx", ESP_LOG_ERROR);
+    esp_log_level_set("esp_https_server", ESP_LOG_WARN);
+    server_loop_begin();
+}
 
 #else
 
